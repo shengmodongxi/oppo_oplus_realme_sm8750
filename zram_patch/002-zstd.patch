@@ -2118,8 +2118,220 @@ diff --git a/include/linux/zstd_lib.h b/include/linux/zstd_lib.h
  
  #endif   /* ZSTD_H_ZSTD_STATIC_LINKING_ONLY */
 -
-只在 b/lib/zstd/common 中存在：allocations.h
-只在 b/lib/zstd/common 中存在：bits.h
+diff --git a/lib/zstd/common/allocations.h b/lib/zstd/common/allocations.h
+--- /dev/null	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/zstd/common/allocations.h	2025-09-28 23:17:32.384858238 +0800
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause */
++/*
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ * All rights reserved.
++ *
++ * This source code is licensed under both the BSD-style license (found in the
++ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
++ * in the COPYING file in the root directory of this source tree).
++ * You may select, at your option, one of the above-listed licenses.
++ */
++
++/* This file provides custom allocation primitives
++ */
++
++#define ZSTD_DEPS_NEED_MALLOC
++#include "zstd_deps.h"   /* ZSTD_malloc, ZSTD_calloc, ZSTD_free, ZSTD_memset */
++
++#include "compiler.h" /* MEM_STATIC */
++#define ZSTD_STATIC_LINKING_ONLY
++#include <linux/zstd.h> /* ZSTD_customMem */
++
++#ifndef ZSTD_ALLOCATIONS_H
++#define ZSTD_ALLOCATIONS_H
++
++/* custom memory allocation functions */
++
++MEM_STATIC void* ZSTD_customMalloc(size_t size, ZSTD_customMem customMem)
++{
++    if (customMem.customAlloc)
++        return customMem.customAlloc(customMem.opaque, size);
++    return ZSTD_malloc(size);
++}
++
++MEM_STATIC void* ZSTD_customCalloc(size_t size, ZSTD_customMem customMem)
++{
++    if (customMem.customAlloc) {
++        /* calloc implemented as malloc+memset;
++         * not as efficient as calloc, but next best guess for custom malloc */
++        void* const ptr = customMem.customAlloc(customMem.opaque, size);
++        ZSTD_memset(ptr, 0, size);
++        return ptr;
++    }
++    return ZSTD_calloc(1, size);
++}
++
++MEM_STATIC void ZSTD_customFree(void* ptr, ZSTD_customMem customMem)
++{
++    if (ptr!=NULL) {
++        if (customMem.customFree)
++            customMem.customFree(customMem.opaque, ptr);
++        else
++            ZSTD_free(ptr);
++    }
++}
++
++#endif /* ZSTD_ALLOCATIONS_H */
+diff --git a/lib/zstd/common/bits.h b/lib/zstd/common/bits.h
+--- /dev/null	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/zstd/common/bits.h	2025-09-28 23:17:32.384947445 +0800
+@@ -0,0 +1,150 @@
++/* SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause */
++/*
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ * All rights reserved.
++ *
++ * This source code is licensed under both the BSD-style license (found in the
++ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
++ * in the COPYING file in the root directory of this source tree).
++ * You may select, at your option, one of the above-listed licenses.
++ */
++
++#ifndef ZSTD_BITS_H
++#define ZSTD_BITS_H
++
++#include "mem.h"
++
++MEM_STATIC unsigned ZSTD_countTrailingZeros32_fallback(U32 val)
++{
++    assert(val != 0);
++    {
++        static const U32 DeBruijnBytePos[32] = {0, 1, 28, 2, 29, 14, 24, 3,
++                                                30, 22, 20, 15, 25, 17, 4, 8,
++                                                31, 27, 13, 23, 21, 19, 16, 7,
++                                                26, 12, 18, 6, 11, 5, 10, 9};
++        return DeBruijnBytePos[((U32) ((val & -(S32) val) * 0x077CB531U)) >> 27];
++    }
++}
++
++MEM_STATIC unsigned ZSTD_countTrailingZeros32(U32 val)
++{
++    assert(val != 0);
++#if (__GNUC__ >= 4)
++    return (unsigned)__builtin_ctz(val);
++#else
++    return ZSTD_countTrailingZeros32_fallback(val);
++#endif
++}
++
++MEM_STATIC unsigned ZSTD_countLeadingZeros32_fallback(U32 val)
++{
++    assert(val != 0);
++    {
++        static const U32 DeBruijnClz[32] = {0, 9, 1, 10, 13, 21, 2, 29,
++                                            11, 14, 16, 18, 22, 25, 3, 30,
++                                            8, 12, 20, 28, 15, 17, 24, 7,
++                                            19, 27, 23, 6, 26, 5, 4, 31};
++        val |= val >> 1;
++        val |= val >> 2;
++        val |= val >> 4;
++        val |= val >> 8;
++        val |= val >> 16;
++        return 31 - DeBruijnClz[(val * 0x07C4ACDDU) >> 27];
++    }
++}
++
++MEM_STATIC unsigned ZSTD_countLeadingZeros32(U32 val)
++{
++    assert(val != 0);
++#if (__GNUC__ >= 4)
++    return (unsigned)__builtin_clz(val);
++#else
++    return ZSTD_countLeadingZeros32_fallback(val);
++#endif
++}
++
++MEM_STATIC unsigned ZSTD_countTrailingZeros64(U64 val)
++{
++    assert(val != 0);
++#if (__GNUC__ >= 4) && defined(__LP64__)
++    return (unsigned)__builtin_ctzll(val);
++#else
++    {
++        U32 mostSignificantWord = (U32)(val >> 32);
++        U32 leastSignificantWord = (U32)val;
++        if (leastSignificantWord == 0) {
++            return 32 + ZSTD_countTrailingZeros32(mostSignificantWord);
++        } else {
++            return ZSTD_countTrailingZeros32(leastSignificantWord);
++        }
++    }
++#endif
++}
++
++MEM_STATIC unsigned ZSTD_countLeadingZeros64(U64 val)
++{
++    assert(val != 0);
++#if (__GNUC__ >= 4)
++    return (unsigned)(__builtin_clzll(val));
++#else
++    {
++        U32 mostSignificantWord = (U32)(val >> 32);
++        U32 leastSignificantWord = (U32)val;
++        if (mostSignificantWord == 0) {
++            return 32 + ZSTD_countLeadingZeros32(leastSignificantWord);
++        } else {
++            return ZSTD_countLeadingZeros32(mostSignificantWord);
++        }
++    }
++#endif
++}
++
++MEM_STATIC unsigned ZSTD_NbCommonBytes(size_t val)
++{
++    if (MEM_isLittleEndian()) {
++        if (MEM_64bits()) {
++            return ZSTD_countTrailingZeros64((U64)val) >> 3;
++        } else {
++            return ZSTD_countTrailingZeros32((U32)val) >> 3;
++        }
++    } else {  /* Big Endian CPU */
++        if (MEM_64bits()) {
++            return ZSTD_countLeadingZeros64((U64)val) >> 3;
++        } else {
++            return ZSTD_countLeadingZeros32((U32)val) >> 3;
++        }
++    }
++}
++
++MEM_STATIC unsigned ZSTD_highbit32(U32 val)   /* compress, dictBuilder, decodeCorpus */
++{
++    assert(val != 0);
++    return 31 - ZSTD_countLeadingZeros32(val);
++}
++
++/* ZSTD_rotateRight_*():
++ * Rotates a bitfield to the right by "count" bits.
++ * https://en.wikipedia.org/w/index.php?title=Circular_shift&oldid=991635599#Implementing_circular_shifts
++ */
++MEM_STATIC
++U64 ZSTD_rotateRight_U64(U64 const value, U32 count) {
++    assert(count < 64);
++    count &= 0x3F; /* for fickle pattern recognition */
++    return (value >> count) | (U64)(value << ((0U - count) & 0x3F));
++}
++
++MEM_STATIC
++U32 ZSTD_rotateRight_U32(U32 const value, U32 count) {
++    assert(count < 32);
++    count &= 0x1F; /* for fickle pattern recognition */
++    return (value >> count) | (U32)(value << ((0U - count) & 0x1F));
++}
++
++MEM_STATIC
++U16 ZSTD_rotateRight_U16(U16 const value, U32 count) {
++    assert(count < 16);
++    count &= 0x0F; /* for fickle pattern recognition */
++    return (value >> count) | (U16)(value << ((0U - count) & 0x0F));
++}
++
++#endif /* ZSTD_BITS_H */
 diff --git a/lib/zstd/common/bitstream.h b/lib/zstd/common/bitstream.h
 --- a/lib/zstd/common/bitstream.h	2025-08-31 04:49:30.258344798 +0800
 +++ b/lib/zstd/common/bitstream.h	2025-09-28 23:17:32.393944164 +0800
@@ -18897,8 +19109,287 @@ diff --git a/lib/zstd/compress/zstd_opt.h b/lib/zstd/compress/zstd_opt.h
 +#endif
  
  #endif /* ZSTD_OPT_H */
-只在 b/lib/zstd/compress 中存在：zstd_preSplit.c
-只在 b/lib/zstd/compress 中存在：zstd_preSplit.h
+diff --git a/lib/zstd/compress/zstd_preSplit.c b/lib/zstd/compress/zstd_preSplit.c
+--- /dev/null	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/zstd/compress/zstd_preSplit.c	2025-09-28 23:17:32.385544369 +0800
+@@ -0,0 +1,239 @@
++// SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause
++/*
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ * All rights reserved.
++ *
++ * This source code is licensed under both the BSD-style license (found in the
++ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
++ * in the COPYING file in the root directory of this source tree).
++ * You may select, at your option, one of the above-listed licenses.
++ */
++
++#include "../common/compiler.h" /* ZSTD_ALIGNOF */
++#include "../common/mem.h" /* S64 */
++#include "../common/zstd_deps.h" /* ZSTD_memset */
++#include "../common/zstd_internal.h" /* ZSTD_STATIC_ASSERT */
++#include "hist.h" /* HIST_add */
++#include "zstd_preSplit.h"
++
++
++#define BLOCKSIZE_MIN 3500
++#define THRESHOLD_PENALTY_RATE 16
++#define THRESHOLD_BASE (THRESHOLD_PENALTY_RATE - 2)
++#define THRESHOLD_PENALTY 3
++
++#define HASHLENGTH 2
++#define HASHLOG_MAX 10
++#define HASHTABLESIZE (1 << HASHLOG_MAX)
++#define HASHMASK (HASHTABLESIZE - 1)
++#define KNUTH 0x9e3779b9
++
++/* for hashLog > 8, hash 2 bytes.
++ * for hashLog == 8, just take the byte, no hashing.
++ * The speed of this method relies on compile-time constant propagation */
++FORCE_INLINE_TEMPLATE unsigned hash2(const void *p, unsigned hashLog)
++{
++    assert(hashLog >= 8);
++    if (hashLog == 8) return (U32)((const BYTE*)p)[0];
++    assert(hashLog <= HASHLOG_MAX);
++    return (U32)(MEM_read16(p)) * KNUTH >> (32 - hashLog);
++}
++
++
++typedef struct {
++  unsigned events[HASHTABLESIZE];
++  size_t nbEvents;
++} Fingerprint;
++typedef struct {
++    Fingerprint pastEvents;
++    Fingerprint newEvents;
++} FPStats;
++
++static void initStats(FPStats* fpstats)
++{
++    ZSTD_memset(fpstats, 0, sizeof(FPStats));
++}
++
++FORCE_INLINE_TEMPLATE void
++addEvents_generic(Fingerprint* fp, const void* src, size_t srcSize, size_t samplingRate, unsigned hashLog)
++{
++    const char* p = (const char*)src;
++    size_t limit = srcSize - HASHLENGTH + 1;
++    size_t n;
++    assert(srcSize >= HASHLENGTH);
++    for (n = 0; n < limit; n+=samplingRate) {
++        fp->events[hash2(p+n, hashLog)]++;
++    }
++    fp->nbEvents += limit/samplingRate;
++}
++
++FORCE_INLINE_TEMPLATE void
++recordFingerprint_generic(Fingerprint* fp, const void* src, size_t srcSize, size_t samplingRate, unsigned hashLog)
++{
++    ZSTD_memset(fp, 0, sizeof(unsigned) * ((size_t)1 << hashLog));
++    fp->nbEvents = 0;
++    addEvents_generic(fp, src, srcSize, samplingRate, hashLog);
++}
++
++typedef void (*RecordEvents_f)(Fingerprint* fp, const void* src, size_t srcSize);
++
++#define FP_RECORD(_rate) ZSTD_recordFingerprint_##_rate
++
++#define ZSTD_GEN_RECORD_FINGERPRINT(_rate, _hSize)                                 \
++    static void FP_RECORD(_rate)(Fingerprint* fp, const void* src, size_t srcSize) \
++    {                                                                              \
++        recordFingerprint_generic(fp, src, srcSize, _rate, _hSize);                \
++    }
++
++ZSTD_GEN_RECORD_FINGERPRINT(1, 10)
++ZSTD_GEN_RECORD_FINGERPRINT(5, 10)
++ZSTD_GEN_RECORD_FINGERPRINT(11, 9)
++ZSTD_GEN_RECORD_FINGERPRINT(43, 8)
++
++
++static U64 abs64(S64 s64) { return (U64)((s64 < 0) ? -s64 : s64); }
++
++static U64 fpDistance(const Fingerprint* fp1, const Fingerprint* fp2, unsigned hashLog)
++{
++    U64 distance = 0;
++    size_t n;
++    assert(hashLog <= HASHLOG_MAX);
++    for (n = 0; n < ((size_t)1 << hashLog); n++) {
++        distance +=
++            abs64((S64)fp1->events[n] * (S64)fp2->nbEvents - (S64)fp2->events[n] * (S64)fp1->nbEvents);
++    }
++    return distance;
++}
++
++/* Compare newEvents with pastEvents
++ * return 1 when considered "too different"
++ */
++static int compareFingerprints(const Fingerprint* ref,
++                            const Fingerprint* newfp,
++                            int penalty,
++                            unsigned hashLog)
++{
++    assert(ref->nbEvents > 0);
++    assert(newfp->nbEvents > 0);
++    {   U64 p50 = (U64)ref->nbEvents * (U64)newfp->nbEvents;
++        U64 deviation = fpDistance(ref, newfp, hashLog);
++        U64 threshold = p50 * (U64)(THRESHOLD_BASE + penalty) / THRESHOLD_PENALTY_RATE;
++        return deviation >= threshold;
++    }
++}
++
++static void mergeEvents(Fingerprint* acc, const Fingerprint* newfp)
++{
++    size_t n;
++    for (n = 0; n < HASHTABLESIZE; n++) {
++        acc->events[n] += newfp->events[n];
++    }
++    acc->nbEvents += newfp->nbEvents;
++}
++
++static void flushEvents(FPStats* fpstats)
++{
++    size_t n;
++    for (n = 0; n < HASHTABLESIZE; n++) {
++        fpstats->pastEvents.events[n] = fpstats->newEvents.events[n];
++    }
++    fpstats->pastEvents.nbEvents = fpstats->newEvents.nbEvents;
++    ZSTD_memset(&fpstats->newEvents, 0, sizeof(fpstats->newEvents));
++}
++
++static void removeEvents(Fingerprint* acc, const Fingerprint* slice)
++{
++    size_t n;
++    for (n = 0; n < HASHTABLESIZE; n++) {
++        assert(acc->events[n] >= slice->events[n]);
++        acc->events[n] -= slice->events[n];
++    }
++    acc->nbEvents -= slice->nbEvents;
++}
++
++#define CHUNKSIZE (8 << 10)
++static size_t ZSTD_splitBlock_byChunks(const void* blockStart, size_t blockSize,
++                        int level,
++                        void* workspace, size_t wkspSize)
++{
++    static const RecordEvents_f records_fs[] = {
++        FP_RECORD(43), FP_RECORD(11), FP_RECORD(5), FP_RECORD(1)
++    };
++    static const unsigned hashParams[] = { 8, 9, 10, 10 };
++    const RecordEvents_f record_f = (assert(0<=level && level<=3), records_fs[level]);
++    FPStats* const fpstats = (FPStats*)workspace;
++    const char* p = (const char*)blockStart;
++    int penalty = THRESHOLD_PENALTY;
++    size_t pos = 0;
++    assert(blockSize == (128 << 10));
++    assert(workspace != NULL);
++    assert((size_t)workspace % ZSTD_ALIGNOF(FPStats) == 0);
++    ZSTD_STATIC_ASSERT(ZSTD_SLIPBLOCK_WORKSPACESIZE >= sizeof(FPStats));
++    assert(wkspSize >= sizeof(FPStats)); (void)wkspSize;
++
++    initStats(fpstats);
++    record_f(&fpstats->pastEvents, p, CHUNKSIZE);
++    for (pos = CHUNKSIZE; pos <= blockSize - CHUNKSIZE; pos += CHUNKSIZE) {
++        record_f(&fpstats->newEvents, p + pos, CHUNKSIZE);
++        if (compareFingerprints(&fpstats->pastEvents, &fpstats->newEvents, penalty, hashParams[level])) {
++            return pos;
++        } else {
++            mergeEvents(&fpstats->pastEvents, &fpstats->newEvents);
++            if (penalty > 0) penalty--;
++        }
++    }
++    assert(pos == blockSize);
++    return blockSize;
++    (void)flushEvents; (void)removeEvents;
++}
++
++/* ZSTD_splitBlock_fromBorders(): very fast strategy :
++ * compare fingerprint from beginning and end of the block,
++ * derive from their difference if it's preferable to split in the middle,
++ * repeat the process a second time, for finer grained decision.
++ * 3 times did not brought improvements, so I stopped at 2.
++ * Benefits are good enough for a cheap heuristic.
++ * More accurate splitting saves more, but speed impact is also more perceptible.
++ * For better accuracy, use more elaborate variant *_byChunks.
++ */
++static size_t ZSTD_splitBlock_fromBorders(const void* blockStart, size_t blockSize,
++                        void* workspace, size_t wkspSize)
++{
++#define SEGMENT_SIZE 512
++    FPStats* const fpstats = (FPStats*)workspace;
++    Fingerprint* middleEvents = (Fingerprint*)(void*)((char*)workspace + 512 * sizeof(unsigned));
++    assert(blockSize == (128 << 10));
++    assert(workspace != NULL);
++    assert((size_t)workspace % ZSTD_ALIGNOF(FPStats) == 0);
++    ZSTD_STATIC_ASSERT(ZSTD_SLIPBLOCK_WORKSPACESIZE >= sizeof(FPStats));
++    assert(wkspSize >= sizeof(FPStats)); (void)wkspSize;
++
++    initStats(fpstats);
++    HIST_add(fpstats->pastEvents.events, blockStart, SEGMENT_SIZE);
++    HIST_add(fpstats->newEvents.events, (const char*)blockStart + blockSize - SEGMENT_SIZE, SEGMENT_SIZE);
++    fpstats->pastEvents.nbEvents = fpstats->newEvents.nbEvents = SEGMENT_SIZE;
++    if (!compareFingerprints(&fpstats->pastEvents, &fpstats->newEvents, 0, 8))
++        return blockSize;
++
++    HIST_add(middleEvents->events, (const char*)blockStart + blockSize/2 - SEGMENT_SIZE/2, SEGMENT_SIZE);
++    middleEvents->nbEvents = SEGMENT_SIZE;
++    {   U64 const distFromBegin = fpDistance(&fpstats->pastEvents, middleEvents, 8);
++        U64 const distFromEnd = fpDistance(&fpstats->newEvents, middleEvents, 8);
++        U64 const minDistance = SEGMENT_SIZE * SEGMENT_SIZE / 3;
++        if (abs64((S64)distFromBegin - (S64)distFromEnd) < minDistance)
++            return 64 KB;
++        return (distFromBegin > distFromEnd) ? 32 KB : 96 KB;
++    }
++}
++
++size_t ZSTD_splitBlock(const void* blockStart, size_t blockSize,
++                    int level,
++                    void* workspace, size_t wkspSize)
++{
++    DEBUGLOG(6, "ZSTD_splitBlock (level=%i)", level);
++    assert(0<=level && level<=4);
++    if (level == 0)
++        return ZSTD_splitBlock_fromBorders(blockStart, blockSize, workspace, wkspSize);
++    /* level >= 1*/
++    return ZSTD_splitBlock_byChunks(blockStart, blockSize, level-1, workspace, wkspSize);
++}
+diff --git a/lib/zstd/compress/zstd_preSplit.h b/lib/zstd/compress/zstd_preSplit.h
+--- /dev/null	1970-01-01 08:00:00.000000000 +0800
++++ b/lib/zstd/compress/zstd_preSplit.h	2025-09-28 23:17:32.386082827 +0800
+@@ -0,0 +1,34 @@
++/* SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause */
++/*
++ * Copyright (c) Meta Platforms, Inc. and affiliates.
++ * All rights reserved.
++ *
++ * This source code is licensed under both the BSD-style license (found in the
++ * LICENSE file in the root directory of this source tree) and the GPLv2 (found
++ * in the COPYING file in the root directory of this source tree).
++ * You may select, at your option, one of the above-listed licenses.
++ */
++
++#ifndef ZSTD_PRESPLIT_H
++#define ZSTD_PRESPLIT_H
++
++#include <linux/types.h>  /* size_t */
++
++#define ZSTD_SLIPBLOCK_WORKSPACESIZE 8208
++
++/* ZSTD_splitBlock():
++ * @level must be a value between 0 and 4.
++ *        higher levels spend more energy to detect block boundaries.
++ * @workspace must be aligned for size_t.
++ * @wkspSize must be at least >= ZSTD_SLIPBLOCK_WORKSPACESIZE
++ * note:
++ * For the time being, this function only accepts full 128 KB blocks.
++ * Therefore, @blockSize must be == 128 KB.
++ * While this could be extended to smaller sizes in the future,
++ * it is not yet clear if this would be useful. TBD.
++ */
++size_t ZSTD_splitBlock(const void* blockStart, size_t blockSize,
++                    int level,
++                    void* workspace, size_t wkspSize);
++
++#endif /* ZSTD_PRESPLIT_H */
 diff --git a/lib/zstd/decompress/huf_decompress.c b/lib/zstd/decompress/huf_decompress.c
 --- a/lib/zstd/decompress/huf_decompress.c	2025-08-31 04:49:30.267880887 +0800
 +++ b/lib/zstd/decompress/huf_decompress.c	2025-09-28 23:17:32.383057422 +0800
