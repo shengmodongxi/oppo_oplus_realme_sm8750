@@ -30,7 +30,7 @@ on:
         description: '是否开启kpm(仅对sukisu生效;可能轻微增加耗电，不需要可关闭)'
         required: true
         type: choice
-        default: 'true'
+        default: 'false'
         options:
           - 'true'
           - 'false'
@@ -57,7 +57,7 @@ on:
         description: '是否开启网络功能增强优化配置(优化代理连接,IPV6等功能)'
         required: true
         type: choice
-        default: 'true'
+        default: 'false'
         options:
           - 'true'
           - 'false'
@@ -65,7 +65,7 @@ on:
         description: '是否启用三星SSG IO调度器及Re-Kernel支持(0=均不安装,1=安装SSG IO调度器,2=安装Re-Kernel,3=均安装,默认1)'
         required: true
         type: choice
-        default: '1'
+        default: '0'
         options:
           - '0'
           - '1'
@@ -75,7 +75,7 @@ on:
         description: '是否开启内核级基带保护(阻止一切对非用户分区的写入，有效防止格机)'
         required: true
         type: boolean
-        default: 'false'
+        default: 'true'
       kernel_suffix:
         description: '内核后缀(留空默认,开头别加连字符,勿加空格等影响指令运行的保留字符)'
         required: false
@@ -293,10 +293,10 @@ jobs:
           if [[ "${{ github.event.inputs.lz4_enable }}" == "1" || "${{ github.event.inputs.lz4_enable }}" == "3" ]]; then
             echo "正在添加lz4 1.10.0 & zstd 1.5.7补丁…"
             cd kernel_workspace
-            git clone https://github.com/cctv18/oppo_oplus_realme_sm8650.git
-            cp ./oppo_oplus_realme_sm8650/zram_patch/001-lz4.patch ./common/
-            cp ./oppo_oplus_realme_sm8650/zram_patch/lz4armv8.S ./common/lib
-            cp ./oppo_oplus_realme_sm8650/zram_patch/002-zstd.patch ./common/
+            git clone https://github.com/cctv18/oppo_oplus_realme_sm8750.git
+            cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
+            cp ./oppo_oplus_realme_sm8750/zram_patch/lz4armv8.S ./common/lib
+            cp ./oppo_oplus_realme_sm8750/zram_patch/002-zstd.patch ./common/
             cd ./common
             git apply -p1 < 001-lz4.patch || true
             patch -p1 < 002-zstd.patch || true
